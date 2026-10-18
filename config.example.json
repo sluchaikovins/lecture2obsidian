@@ -1,0 +1,21 @@
+{
+  "vault": "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Лекции",
+  "model": "qwen3:14b",
+  "lang": "ru",
+  "ollama": "~/Applications/Ollama.app/Contents/Resources/ollama",
+  "vision": "qwen3-vl:8b",
+  "photo_dirs": [
+    "~/Downloads",
+    "~/Desktop"
+  ],
+  "subjects": [
+    "Программирование",
+    "Матанализ",
+    "Философия"
+  ],
+  "live_answers": true,
+  "telegram": {
+    "token": "",
+    "chat_id": ""
+  }
+}

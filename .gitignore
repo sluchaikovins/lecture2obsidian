@@ -1,0 +1,16 @@
+# Personal data — never in the repo
+config.json
+recordings/
+l2o.log
+*.log
+
+# Large / built artefacts
+models/
+src/whisper.cpp/
+.venv/
+bin/
+dist-bin/
+dist/
+__pycache__/
+*.pyc
+.DS_Store
