@@ -163,6 +163,46 @@ def recording_start(src: Path, seconds: int) -> dt.datetime:
     return dt.datetime.fromtimestamp(src.stat().st_mtime) - dt.timedelta(seconds=seconds)
 
 
+def dead_spans(wav_path: Path, min_secs: int = 20):
+    """Stretches of digital silence (exact zeros): the mic stopped delivering sound — lid closed, headphones
+    connected, Mac asleep. Whisper invents text on them ("Чек, чек, чек…"), so their segments are dropped."""
+    spans, run_start, sec = [], None, 0
+    with open(wav_path, "rb") as f:
+        start = f.read(16384).find(b"data") + 8
+        f.seek(start)
+        while True:
+            chunk = f.read(32000)  # one second
+            if not chunk:
+                break
+            dead = not chunk.strip(b"\0")
+            if dead and run_start is None:
+                run_start = sec
+            elif not dead and run_start is not None:
+                if sec - run_start >= min_secs:
+                    spans.append((run_start, sec))
+                run_start = None
+            sec += 1
+    if run_start is not None and sec - run_start >= min_secs:
+        spans.append((run_start, sec))
+    return spans
+
+
+def quality_note(seconds: int, spans, words: int) -> str:
+    """One honest line at the top of the note: how much of the lecture actually made it in."""
+    lost = sum(b - a for a, b in spans)
+    heard = max(1, seconds - lost)
+    rate = words / (heard / 60)
+    line = f"Расшифровано {mmss(heard)} из {mmss(seconds)}, {rate:.0f} слов/мин"
+    if spans:
+        where = ", ".join(f"{mmss(a)}–{mmss(b)}" for a, b in spans)
+        return (f"> [!warning] Микрофон не записывал звук: {where}\n"
+                f"> Этой части лекции в конспекте нет (закрыта крышка, подключились наушники или мак уснул). {line}.")
+    if rate < 35:
+        return (f"> [!warning] Подозрительно мало речи: {line}\n"
+                f"> Возможно, микрофон был далеко от лектора — сверьте конспект с записью.")
+    return f"> [!info] {line}"
+
+
 def transcribe(wav_path: Path):
     """Returns [(start_seconds, text), …]."""
     out_base = wav_path.with_suffix("")
@@ -464,6 +504,9 @@ def process(src: Path):
                                "Микрофон → Hammerspoon, и что выбран нужный микрофон")
         started = recording_start(src, seconds)
         stamp = f"{started:%Y-%m-%d %H-%M}"
+        spans = dead_spans(wav)
+        if spans:
+            log("no sound: " + ", ".join(f"{mmss(a)}–{mmss(b)}" for a, b in spans))
 
         # The transcript is kept next to the recording, so a retry after a failed summary skips Whisper.
         cache = src.with_suffix(".transcript.json")
@@ -475,6 +518,7 @@ def process(src: Path):
             segments = drop_repeats([tuple(x) for x in transcribe(wav)])
             if segments and src.parent == ROOT / "recordings":
                 cache.write_text(json.dumps(segments, ensure_ascii=False), encoding="utf-8")
+        segments = [x for x in segments if not any(a - 1 <= x[0] < b for a, b in spans)]
         if not segments:
             raise RuntimeError("пустая расшифровка — возможно, микрофон ничего не записал")
 
@@ -567,6 +611,7 @@ def process(src: Path):
         f"---\n\n"
         f"# {title}\n\n"
         f"{nav}\n\n"
+        f"{quality_note(seconds, spans, sum(len(t.split()) for _, t in segments))}\n\n"
         f"{body}\n\n"
         f"{qa_md}"
         f"{related_md}"

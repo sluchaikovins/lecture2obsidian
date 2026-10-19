@@ -43,10 +43,42 @@ local function liveEnabled()
   return hs.json.read(L2O .. "/config.json").live_answers ~= false
 end
 
+-- Mic watchdog: if the last second of the recording is exact zeros for 20 s, the mic has dropped out
+-- (lid closed, headphones connected, Mac asleep) — the rest of the lecture would be silently lost.
+local deadSince, warnedAt
+local function lastSecondIsDead(path)
+  local fh = io.open(path, "rb")
+  if not fh then return false end
+  local size = fh:seek("end")
+  if size < 4096 + 32000 then fh:close(); return false end
+  fh:seek("set", size - 32000)
+  local chunk = fh:read(32000)
+  fh:close()
+  return chunk ~= nil and not chunk:find("[^%z]")
+end
+
+local function micWatchdog()
+  if not recFile then return end
+  if lastSecondIsDead(recFile) then
+    deadSince = deadSince or os.time()
+    if os.time() - deadSince >= 20 and (not warnedAt or os.time() - warnedAt >= 120) then
+      warnedAt = os.time()
+      hs.alert.show("🎙❌ Микрофон пропал — запись идёт, но звука нет!\nНе закрывайте крышку; если подключили наушники — "
+        .. "остановите и начните запись заново (F5)", 8)
+      hs.notify.new({ title = "🎙❌ Микрофон пропал", informativeText = "Запись идёт, но звука нет",
+        soundName = "Basso", withdrawAfter = 0 }):send()
+    end
+  else
+    if warnedAt then hs.alert.show("🎙✅ Звук снова пишется") end
+    deadSince, warnedAt = nil, nil
+  end
+end
+
 local function refresh()
   local title = "🎓"
   if recorder then
-    title = "🔴 " .. fmt(os.time() - recStart)
+    title = (deadSince and os.time() - deadSince >= 20 and "🎙❌ " or "🔴 ") .. fmt(os.time() - recStart)
+    if (os.time() - recStart) % 5 == 0 then micWatchdog() end
     if shots > 0 then title = title .. " 📷" .. shots end
   end
   if jobs > 0 then title = title .. " ⏳" .. (jobs > 1 and jobs or "") end
@@ -102,6 +134,7 @@ local function startRecording()
   end, { recFile })
   recorder:start()
   recStart = os.time()
+  deadSince, warnedAt = nil, nil
   -- Live answers to the lecturer's questions (live.py writes its own log lines).
   if liveEnabled() then
     listener = hs.task.new("/usr/bin/python3", nil, { L2O .. "/live.py", recFile })
@@ -368,6 +401,7 @@ end
 -- For checking things from the `hs` CLI without pressing keys.
 L2O_DEBUG = {
   toggle = toggle,
+  deadCheck = function(path) return lastSecondIsDead(path) end,
   show = function(path) local fh = io.open(path, "r"); showRecap(fh:read("a")); fh:close() end,
   cancel = function() if recorder then stopRecording(true) end end,
   recapFor = function(wav)
