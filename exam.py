@@ -116,7 +116,7 @@ def main():
         f"# 📝 Подготовка к экзамену: {subject}\n\n"
         f"**Предмет:** [[{index.stem}]] · по {len(notes)} лекциям\n\n"
         + "\n\n".join(out)
-        + (f"\n\n## Задания и даты\n\n" + "\n\n".join(deadlines) if deadlines else "")
+        + ("\n\n## Задания и даты\n\n" + "\n\n".join(deadlines) if deadlines else "")
         + f"\n\n## Лекции\n{lectures}\n",
         encoding="utf-8",
     )

@@ -14,13 +14,13 @@ import array
 import difflib
 import json
 import re
-import subprocess
 import sys
 import tempfile
 import time
 import wave
 from pathlib import Path
 
+import osutil
 from process import (HALLUCINATION, LANG, LLM_MODEL, NUM_CTX, ROOT, WHISPER, WHISPER_MODEL, ensure_ollama, log, mmss,
                      notify, ollama_chat)
 
@@ -84,7 +84,7 @@ def transcribe_window(pcm: bytes, offset: float):
             w.setframerate(16000)
             w.writeframes(pcm)
         # Greedy decoding and a 15 s encoder window (-ac 768) instead of 30 s: ~30% faster on these windows.
-        out = subprocess.run([str(WHISPER), "-m", str(WHISPER_MODEL), "-l", LANG, "-np", "-bs", "1", "-ac", "768",
+        out = osutil.run([WHISPER, "-m", str(WHISPER_MODEL), "-l", LANG, "-np", "-bs", "1", "-ac", "768",
                               "-f", str(path)],
                              capture_output=True, text=True, check=True).stdout
     segs = []
@@ -110,7 +110,7 @@ def answer(context: str, question: str):
 
 
 def recorder_alive(wav: Path) -> bool:
-    return subprocess.run(["pgrep", "-f", f"bin/recorder {wav}"], capture_output=True).returncode == 0
+    return osutil.recorder_alive(wav)
 
 
 def main():

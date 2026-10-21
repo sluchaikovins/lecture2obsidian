@@ -7,6 +7,8 @@ local L2O = HOME .. "/lecture2obsidian"
 local REC_DIR = L2O .. "/recordings"
 local LOG = L2O .. "/l2o.log"
 local VAULT = hs.json.read(L2O .. "/config.json").vault
+-- Scripts run in the project's own Python environment (sounddevice, Pillow); system Python as a fallback.
+local PY = hs.fs.attributes(L2O .. "/.venv/bin/python3") and (L2O .. "/.venv/bin/python3") or "/usr/bin/python3"
 
 hs.fs.mkdir(REC_DIR)
 hs.autoLaunch(true)  -- start with macOS so F5 always works
@@ -88,7 +90,7 @@ end
 local function runJob(script, ...)
   jobs = jobs + 1
   refresh()
-  local cmd = string.format('/usr/bin/python3 %q', L2O .. "/" .. script)
+  local cmd = string.format('%q %q', PY, L2O .. "/" .. script)
   for _, a in ipairs({ ... }) do cmd = cmd .. string.format(" %q", tostring(a)) end
   cmd = cmd .. string.format(" >> %q 2>&1", LOG)
   spawn("/bin/sh", function()
@@ -104,7 +106,7 @@ local function process(file)
   active[file] = true
   jobs = jobs + 1
   refresh()
-  local cmd = string.format('/usr/bin/python3 %q %q >> %q 2>&1', L2O .. "/process.py", file, LOG)
+  local cmd = string.format('%q %q %q >> %q 2>&1', PY, L2O .. "/process.py", file, LOG)
   spawn("/bin/sh", function()
     active[file] = nil
     jobs = jobs - 1
@@ -124,20 +126,24 @@ end
 
 local function startRecording()
   recFile = REC_DIR .. "/" .. os.date("%Y-%m-%d_%H-%M-%S") .. ".wav"
-  recorder = hs.task.new(L2O .. "/bin/recorder", function(code, _, err)
+  -- recorder.py (Python, also used on Windows); config "recorder": "swift" switches back to the old one.
+  local useSwift = hs.json.read(L2O .. "/config.json").recorder == "swift"
+  local exe, args = PY, { L2O .. "/recorder.py", recFile }
+  if useSwift then exe, args = L2O .. "/bin/recorder", { recFile } end
+  recorder = hs.task.new(exe, function(code, _, err)
     if code ~= 0 and recorder then
       hs.alert.show("Запись не удалась: " .. (err or code))
       recorder = nil
       if tick then tick:stop() end
       refresh()
     end
-  end, { recFile })
+  end, args)
   recorder:start()
   recStart = os.time()
   deadSince, warnedAt = nil, nil
   -- Live answers to the lecturer's questions (live.py writes its own log lines).
   if liveEnabled() then
-    listener = hs.task.new("/usr/bin/python3", nil, { L2O .. "/live.py", recFile })
+    listener = hs.task.new(PY, nil, { L2O .. "/live.py", recFile })
     listener:start()
   end
   shots = 0
@@ -201,8 +207,9 @@ end
 
 local function runningRecorders()
   local found = {}
-  for pid in hs.execute("pgrep -f '" .. L2O .. "/bin/recorder'"):gmatch("%d+") do
-    local file = hs.execute("ps -o args= -p " .. pid):match("bin/recorder%s+(.-)%s*$")
+  for pid in hs.execute("pgrep -f '" .. L2O .. "/(bin/recorder|recorder.py) '"):gmatch("%d+") do
+    local args = hs.execute("ps -o args= -p " .. pid)
+    local file = args:match("recorder%.py%s+(.-)%s*$") or args:match("bin/recorder%s+(.-)%s*$")
     if file then table.insert(found, { pid = pid, file = file }) end
   end
   return found
@@ -284,7 +291,7 @@ local function recap()
   os.remove(page)
   showRecap("<html><body style='font-family:-apple-system;color:#8a8378;text-align:center;margin-top:80px;"
     .. "background:#fcfaf5'>⏳ Собираю, что было за последние " .. RECAP_MINUTES .. " минут…</body></html>")
-  spawn("/usr/bin/python3", function()
+  spawn(PY, function()
     local fh = io.open(page, "r")
     if fh then
       showRecap(fh:read("a"))
@@ -328,7 +335,7 @@ menu:setMenu(function()
         if button ~= "Подключить" or token == "" then return end
         cfg.telegram = { token = token:match("^%s*(.-)%s*$"), chat_id = "" }
         hs.json.write(cfg, L2O .. "/config.json", true, true)
-        local out, ok = hs.execute(string.format("/usr/bin/python3 %q setup 2>&1", L2O .. "/telegram.py"))
+        local out, ok = hs.execute(string.format("%q %q setup 2>&1", PY, L2O .. "/telegram.py"))
         hs.alert.show(ok and "✅ Telegram подключён — проверьте сообщение от бота" or ("Не вышло: " .. out), 6)
       end },
     { title = "📚 Мои предметы…", fn = function()
@@ -381,7 +388,7 @@ if #running > 0 then
   tick = hs.timer.doEvery(1, refresh)
   startAutoRecap()
   if liveEnabled() then
-    listener = hs.task.new("/usr/bin/python3", nil, { L2O .. "/live.py", recFile })
+    listener = hs.task.new(PY, nil, { L2O .. "/live.py", recFile })
     listener:start()
   end
   hs.alert.show("🔴 Запись продолжается — F5, чтобы остановить")
@@ -405,7 +412,7 @@ L2O_DEBUG = {
   show = function(path) local fh = io.open(path, "r"); showRecap(fh:read("a")); fh:close() end,
   cancel = function() if recorder then stopRecording(true) end end,
   recapFor = function(wav)
-    spawn("/usr/bin/python3", function()
+    spawn(PY, function()
       local fh = io.open((wav:gsub("%.wav$", ".recap.html")), "r")
       if fh then showRecap(fh:read("a")); fh:close() end
     end, { L2O .. "/recap.py", wav, "1" })

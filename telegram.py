@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sends lecture notes to Telegram as pictures: markdown → HTML → PNG (bin/render) → sendMediaGroup.
+"""Sends lecture notes to Telegram as pictures: markdown → PNG (render.py) → sendMediaGroup.
 
 Config (config.json): "telegram": {"token": "<from @BotFather>", "chat_id": "<filled in by `telegram.py setup`>"}
 
@@ -9,7 +9,6 @@ Usage: telegram.py setup        — finds your chat with the bot (send the bot a
 import html
 import json
 import re
-import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -17,18 +16,8 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-RENDER = ROOT / "bin" / "render"
 PART_CHARS = 1400  # text per picture: about one phone screen at a readable size
 
-CSS = """<style>
-body { font-family: -apple-system, 'Helvetica Neue'; font-size: 17px; color: #1f1d1a; line-height: 1.35; }
-h1 { font-size: 24px; margin: 0 0 6px 0; }
-h2 { font-size: 21px; color: #7a3e12; margin: 14px 0 6px 0; }
-h3 { font-size: 18px; color: #2d5a87; margin: 12px 0 4px 0; }
-p, li { margin: 3px 0; }
-.meta { color: #8a8378; font-size: 14px; }
-table { border-collapse: collapse; } td, th { border: 1px solid #d6cfc2; padding: 4px 6px; font-size: 15px; }
-</style>"""
 
 
 def config():
@@ -156,15 +145,11 @@ def split_parts(md: str, limit: int = PART_CHARS):
 
 def render(md_parts, header: str, tmp: Path):
     """PNG paths, one per part; every picture carries the header so it makes sense on its own."""
+    from render import render_png
     paths = []
     for i, part in enumerate(md_parts, 1):
         page = f"{i}/{len(md_parts)}" if len(md_parts) > 1 else ""
-        doc = (f"<html><head><meta charset='utf-8'>{CSS}</head><body>"
-               f"<p class='meta'>{html.escape(header)} {page}</p>{md_to_html(part)}</body></html>")
-        src, png = tmp / f"p{i}.html", tmp / f"p{i}.png"
-        src.write_text(doc, encoding="utf-8")
-        subprocess.run([str(RENDER), str(src), str(png)], check=True)
-        paths.append(png)
+        paths.append(render_png(part, f"{header} {page}".strip(), tmp / f"p{i}.png"))
     return paths
 
 

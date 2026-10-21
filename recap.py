@@ -14,12 +14,12 @@ import html
 import datetime as dt
 import json
 import re
-import subprocess
 import sys
 import tempfile
 import wave
 from pathlib import Path
 
+import osutil
 import telegram
 from process import (HALLUCINATION, LANG, LLM_MODEL, NUM_CTX, ROOT, WHISPER, WHISPER_MODEL, ensure_ollama, log,
                      notify, ollama_chat)
@@ -75,7 +75,7 @@ def transcribe_tail(wav: Path, since: float, until: float):
             w.setsampwidth(2)
             w.setframerate(16000)
             w.writeframes(pcm)
-        out = subprocess.run([str(WHISPER), "-m", str(WHISPER_MODEL), "-l", LANG, "-mc", "0", "-nt", "-np", "-f", str(path)],
+        out = osutil.run([WHISPER, "-m", str(WHISPER_MODEL), "-l", LANG, "-mc", "0", "-nt", "-np", "-f", str(path)],
                              capture_output=True, text=True, check=True).stdout
     # -nt prints everything as one line: filter Whisper's inventions sentence by sentence, not line by line,
     # or one "Продолжение следует…" in the silence at the end drops the whole transcript.
@@ -132,6 +132,7 @@ def main():
         return
     if not words:
         out.write_text(page(period, "<p class='wait'>За это время ничего не слышно 🤫</p>"), encoding="utf-8")
+        out.with_suffix(".md").write_text(f"{period}\n\nЗа это время ничего не слышно 🤫", encoding="utf-8")
         return
 
     ensure_ollama()
@@ -146,6 +147,8 @@ def main():
         log(f"recap: sent {n} picture(s) for {period} ({words} words)")
     else:
         out.write_text(page(f"{kind} · {period}", telegram.md_to_html(md)), encoding="utf-8")
+        # The Windows tray app draws plain markdown in its own window.
+        out.with_suffix(".md").write_text(f"{kind} · {period}\n\n{md}", encoding="utf-8")
         log(f"recap: {period} ({words} words) → window")
 
 

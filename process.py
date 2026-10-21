@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Audio file → whisper.cpp transcript → Ollama summary → Obsidian note.
 
-Usage: process.py <audio file>   (wav, m4a, mp3, … — anything afconvert reads)
+Usage: process.py <audio file>   (wav, m4a, mp3, … — whatever afconvert on macOS / ffmpeg on Windows reads)
 
 Photos of the board/slides taken during the lecture are picked up automatically:
 screenshots made with fn+F6 while recording, and any image in the photo folders from
@@ -23,13 +23,17 @@ import time
 import urllib.request
 from pathlib import Path
 
+import osutil
+from osutil import import_photo, notify, power_note, taken_at, to_wav16k
+
 ROOT = Path(__file__).resolve().parent
-CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))  # written by install.sh
+# Written by install.sh / install.ps1. L2O_CONFIG points elsewhere (tests use a throwaway config).
+CONFIG = json.loads(Path(os.environ.get("L2O_CONFIG", ROOT / "config.json")).read_text(encoding="utf-8"))
 VAULT = Path(CONFIG["vault"]).expanduser()
 AUDIO_DIR = VAULT / "Audio"
 PHOTO_DIR = VAULT / "Фото"
 SERVICE_DIRS = {"Audio", "Фото"}  # every other folder in VAULT is a subject
-WHISPER = ROOT / "bin" / "whisper-cli"
+WHISPER = ROOT / "bin" / ("whisper-cli" + osutil.EXE)
 WHISPER_MODEL = ROOT / "models" / "ggml-large-v3-turbo.bin"
 LANG = CONFIG.get("lang", "ru")
 OLLAMA_URL = "http://127.0.0.1:11434"
@@ -115,12 +119,6 @@ VISION_PROMPT = """Это фото доски или слайда с лекци�
 Если на фото нет учебного материала (люди, аудитория, размытое фото) — ответь одним словом: НЕТ"""
 
 
-def notify(title, text):
-    subprocess.run(["osascript", "-e", "on run argv", "-e",
-                    "display notification (item 2 of argv) with title (item 1 of argv)",
-                    "-e", "end run", "--", title, text], check=False)
-
-
 def log(msg):
     print(f"[{dt.datetime.now():%H:%M:%S}] {msg}", flush=True)
 
@@ -130,14 +128,12 @@ def mmss(secs: float) -> str:
     return f"{secs // 3600}:{secs % 3600 // 60:02d}:{secs % 60:02d}" if secs >= 3600 else f"{secs // 60:02d}:{secs % 60:02d}"
 
 
-def to_wav16k(src: Path, dst: Path):
-    subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(src), str(dst)], check=True)
-
-
 def wav_seconds(wav_path: Path) -> int:
-    # afinfo, unlike the wave module, also reads WAVE_FORMAT_EXTENSIBLE (what afconvert makes from m4a)
-    out = subprocess.run(["afinfo", str(wav_path)], capture_output=True, text=True, check=True).stdout
-    return int(float(re.search(r"estimated duration: ([\d.]+)", out).group(1)))
+    """Length of a 16 kHz mono 16-bit WAV (what to_wav16k makes), from the data size. Header-agnostic:
+    works for WAVE_FORMAT_EXTENSIBLE and padded headers that the wave module rejects."""
+    with open(wav_path, "rb") as f:
+        start = f.read(16384).find(b"data") + 8
+    return int((wav_path.stat().st_size - start) / 32000)
 
 
 def loudness(wav_path: Path) -> float:
@@ -206,11 +202,11 @@ def quality_note(seconds: int, spans, words: int) -> str:
 def transcribe(wav_path: Path):
     """Returns [(start_seconds, text), …]."""
     out_base = wav_path.with_suffix("")
-    subprocess.run(
-        [str(WHISPER), "-m", str(WHISPER_MODEL), "-l", LANG, "-f", str(wav_path),
+    osutil.run(
+        [WHISPER, "-m", WHISPER_MODEL, "-l", LANG, "-f", wav_path,
          # -mc 0: no conditioning on earlier text — otherwise Whisper falls into loops and repeats one
          # phrase for minutes ("Леонардо да Винчи" ×1000), losing the lecture under it.
-         "-mc", "0", "-oj", "-of", str(out_base), "-np"],
+         "-mc", "0", "-oj", "-of", out_base, "-np"],
         check=True, stdout=subprocess.DEVNULL,
     )
     segments = json.loads(out_base.with_suffix(".json").read_text(encoding="utf-8"))["transcription"]
@@ -226,30 +222,6 @@ def drop_repeats(segments):
             continue
         out.append(seg)
     return out
-
-
-def power_note():
-    """Ollama writes ~3x slower on battery or a weak charger; say so up front instead of leaving people waiting."""
-    batt = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True).stdout
-    if "Battery Power" in batt:
-        return "мак на батарее — конспект будет делаться в 2–3 раза дольше. Поставьте на зарядку"
-    watts = re.search(r"Wattage = (\d+)W", subprocess.run(["pmset", "-g", "ac"], capture_output=True, text=True).stdout)
-    if watts and int(watts.group(1)) < 20:
-        return (f"зарядка слабая ({watts.group(1)} Вт) — конспект будет делаться в разы дольше. "
-                f"Нужна зарядка от мака (от 30 Вт)")
-    return None
-
-
-# ---------- photos ----------
-
-def taken_at(path: Path) -> dt.datetime:
-    # Spotlight exposes the EXIF capture time for photos; fall back to when the file appeared.
-    out = subprocess.run(["mdls", "-raw", "-name", "kMDItemContentCreationDate", str(path)],
-                         capture_output=True, text=True).stdout.strip()
-    try:
-        return dt.datetime.strptime(out, "%Y-%m-%d %H:%M:%S %z").astimezone().replace(tzinfo=None)
-    except ValueError:
-        return dt.datetime.fromtimestamp(path.stat().st_birthtime)
 
 
 def find_photos(session_dir: Path, start: dt.datetime, seconds: int):
@@ -271,11 +243,6 @@ def find_photos(session_dir: Path, start: dt.datetime, seconds: int):
     return sorted((max(0.0, min((t - start).total_seconds(), seconds)), p) for p, t in found.items())
 
 
-def import_photo(src: Path, dst: Path):
-    subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "80", "-Z", "2000",
-                    str(src), "--out", str(dst)], check=True, stdout=subprocess.DEVNULL)
-
-
 def read_photo(path: Path):
     """Board/slide content as text, or None if the photo has nothing to read."""
     content = ollama_chat(VISION_MODEL, [{"role": "user", "content": VISION_PROMPT,
@@ -288,9 +255,7 @@ def read_photo(path: Path):
 
 def ollama_bin() -> Path:
     # Ollama.app offers to move itself to /Applications on first launch, so the configured path can go stale.
-    candidates = [Path(CONFIG.get("ollama", "")).expanduser()] + [
-        d / "Ollama.app/Contents/Resources/ollama" for d in (Path("/Applications"), Path.home() / "Applications")
-    ] + [Path("/usr/local/bin/ollama"), Path("/opt/homebrew/bin/ollama")]
+    candidates = [Path(CONFIG.get("ollama", "")).expanduser()] + osutil.ollama_candidates()
     for c in candidates:
         if c.is_file():
             return c
@@ -308,7 +273,7 @@ def ensure_ollama():
         # Flash attention + 8-bit KV cache: ~2 GB less memory at a 32k context, same speed.
         env = dict(os.environ, OLLAMA_FLASH_ATTENTION="1", OLLAMA_KV_CACHE_TYPE="q8_0")
         subprocess.Popen([str(ollama_bin()), "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True, env=env)
+                         start_new_session=True, env=env, **osutil.HIDDEN)
         for _ in range(30):
             try:
                 urllib.request.urlopen(OLLAMA_URL + "/api/version", timeout=3)
@@ -522,9 +487,7 @@ def process(src: Path):
         if not segments:
             raise RuntimeError("пустая расшифровка — возможно, микрофон ничего не записал")
 
-        audio_name = f"{stamp}.m4a"
-        subprocess.run(["afconvert", "-f", "m4af", "-d", "aac", "-b", "32000", str(wav),
-                        str(AUDIO_DIR / audio_name)], check=True)
+        audio_name = osutil.compress_audio(wav, AUDIO_DIR / stamp).name  # .m4a on macOS, .mp3 on Windows
 
     ensure_ollama()
 
@@ -643,7 +606,7 @@ def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     # Keep the Mac awake until this process exits: a lecture takes minutes of GPU work.
-    subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+    osutil.keep_awake()
     src = Path(sys.argv[1]).expanduser().resolve()
     slow = power_note()
     if slow:

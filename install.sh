@@ -9,8 +9,8 @@ APPS="$HOME/Applications"
 WHISPER_PATH="ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
 WHISPER_SHA1="4af2b29d7ec73d781377bfd1758ca957a807e941"
 REPO="sluchaikovins/lecture2obsidian"  # GitHub repo whose releases carry the prebuilt binaries (bin/ isn't in git)
-SCRIPTS="process.py exam.py live.py recap.py telegram.py README.md config.example.json"
-BINARIES="recorder whisper-cli render"
+SCRIPTS="process.py exam.py live.py recap.py telegram.py render.py osutil.py recorder.py README.md config.example.json"
+BINARIES="recorder whisper-cli"  # bin/recorder: the old Swift recorder, kept as a fallback
 
 bold() { printf "\n\033[1m%s\033[0m\n" "$*"; }
 ok()   { printf "  ✅ %s\n" "$*"; }
@@ -102,6 +102,12 @@ if [ "$SRC" != "$DEST" ]; then
 fi
 chmod +x "$DEST/bin/"* "$DEST/install.sh"
 xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+ok "Готово"
+
+echo "  Окружение Python и библиотеки (запись звука, картинки)…"
+[ -x "$DEST/.venv/bin/python3" ] || /usr/bin/python3 -m venv "$DEST/.venv"
+"$DEST/.venv/bin/python3" -m pip install -q --upgrade pip
+"$DEST/.venv/bin/python3" -m pip install -q sounddevice pillow || die "Не удалось поставить библиотеки Python."
 ok "Готово"
 
 # ---------- 3. Приложения ----------
