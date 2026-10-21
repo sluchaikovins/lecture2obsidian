@@ -624,7 +624,8 @@ def main():
         shutil.rmtree(src.with_suffix(".photos"), ignore_errors=True)
         src.with_suffix(".transcript.json").unlink(missing_ok=True)
         src.with_suffix(".qa.jsonl").unlink(missing_ok=True)
-        src.with_suffix(".live.jsonl").unlink(missing_ok=True)
+        for ext in (".live.jsonl", ".recap.html", ".recap.md", ".lock"):
+            src.with_suffix(ext).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
